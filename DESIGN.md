@@ -145,6 +145,16 @@ The CAS holds nothing while the PSP is slow, and losers fail fast.
 
 ## 7. Production Readiness Gap
 
-1. **Observability.** Metrics and alerts on the oldest pending attempt, webhook backlog, PSP error rate and latency, and the 409 rate.
-2. **Rate limiting.** A per-key Redis token bucket (e.g. 100 req/s, burst 200), stricter on `/pay` to stop card testing. Throttled requests get `429` + `Retry-After`. If Redis is down, `/pay` fails closed.
-3. **Audit log.** An append-only record of every transition and key operation (which key, what, when, from where), for disputes and support.
+**Top 3:**
+1. **Database high availability.** A hot standby with automatic failover, synchronous replication (so a failover can't lose a charged `pending` attempt), and point-in-time backups.
+2. **Observability.** Alerts on stuck pending attempts, webhook backlog, PSP errors and latency, and DB pool saturation, plus a runbook for stuck payments.
+3. **Rate limiting.** A per-key Redis token bucket, stricter on `/pay` against card testing, returning `429` + `Retry-After`.
+
+**Also needed:**
+- An audit log of transitions and key operations.
+- A daily settlement reconciliation against the PSP's report.
+- A PSP circuit breaker.
+- Workers in separate processes.
+- TLS and a secret manager.
+- Separate liveness and readiness checks.
+- Data retention and PII deletion.

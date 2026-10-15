@@ -75,6 +75,12 @@ docker compose logs -f mock-psp                                       # "webhook
 
 **Slow PSP.** On a fresh `open` invoice, `"card_token": "tok_timeout"` returns **202** after 5 s with a `pending` attempt instead of hanging. About 30 s later the reconciler finds out from the PSP that the charge succeeded, marks the invoice `paid` and sends `invoice.paid`. `tok_network_error` takes the same path but resolves to `failed` (`psp_unreachable`), and the invoice stays payable.
 
+**Everything at once.** With the stack running, [demo.sh](demo.sh) runs every flow above, plus idempotency edge cases, a 20-way payment race, `tok_timeout` and `tok_network_error`, and prints PASS/FAIL per check (needs `jq`).
+```bash
+./demo.sh            # ~1 min, waits for the slow-PSP cases to settle
+FAST=1 ./demo.sh     # ~5 s, skips them
+```
+
 ## Tests
 
 The tests are in [tests/payments.rs](tests/payments.rs): the three the assignment requires, plus a second PSP-failure test for `tok_network_error`.
