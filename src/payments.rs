@@ -90,7 +90,19 @@ pub async fn has_pending_attempt(conn: &mut PgConnection, invoice_id: Uuid) -> R
         .await?)
 }
 
+/// Cases and how each is handled:
+/// - Charged → invoice `paid`, 201. Declined → invoice stays `open` (try another card), 402.
+/// - Draft/void invoice → 409 `invalid_state_transition`. Already paid → 409 `invoice_already_paid`.
+/// - Same key + same body → stored response replayed, no second PSP call.
+///   Same key + different body → 422. Same key still running → 409.
+/// - Two pays at once → version compare-and-swap: one wins, the rest get 409 immediately.
+/// - Pay or void while an attempt is pending → 409 `payment_in_progress`.
+/// - PSP timeout/error → outcome unknown, not failed: stays `pending`, 202; the reconciler finishes it.
+/// - Crash after the PSP charged → attempt still `pending`; the reconciler finishes it. No double
+///   charge: one pending attempt per invoice, PSP dedupes on attempt id, one `succeeded` per invoice.
 pub async fn pay(State(state): State<AppState>, auth: Auth, Path(id): Path<String>, headers: HeaderMap, body: Bytes) -> Result<Response, ApiError> {
+    // Step 0, validate: a parseable invoice id, a required Idempotency-Key, a valid body. The hash
+    // fingerprints the request so a retry can be told apart from a reused key with a new body.
     let invoice_id = parse_id(&id, "invoice")?;
     let key = idempotency_key(&headers)?.ok_or(ApiError::IdempotencyKeyRequired)?;
     let (req, canonical) = parse_json::<PayRequest>(&body)?;
@@ -99,15 +111,19 @@ pub async fn pay(State(state): State<AppState>, auth: Auth, Path(id): Path<Strin
     }
     let hash = request_hash("POST", &format!("/v1/invoices/{invoice_id}/pay"), &canonical);
 
-    // Step 1
+    // Step 1, reserve (Tx1, milliseconds): claim the key, check the invoice can be paid, win the
+    // version CAS, insert a `pending` attempt, commit. A replayed key returns the stored response here.
     let attempt = match start_attempt(&state, auth.business_id, invoice_id, &key, &hash, &req.card_token).await? {
         Started::Attempt(a) => *a,
         Started::Replay(code, body) => return Ok(respond(code, body, true)),
     };
     tracing::info!(attempt_id = %attempt.id, %invoice_id, amount_cents = attempt.amount_cents, "payment attempt started");
 
-    // Step 2: no transaction is open here, so a slow PSP holds no lock and no DB connection.
+    // Step 2, charge: no transaction is open here, so a slow PSP holds no lock and no DB connection.
+    // The attempt id is the PSP's reference, so a resend can never create a second charge.
     match state.psp.charge(attempt.id, attempt.amount_cents, &req.card_token).await {
+        // Step 3b, outcome unknown (timeout, 5xx, dropped connection): a timeout means "don't know",
+        // not "no", so the attempt stays pending, we answer 202 and the reconciler finds out later.
         ChargeOutcome::Unknown { reason } => {
             tracing::warn!(attempt_id = %attempt.id, %reason, "PSP outcome unknown; attempt stays pending for the reconciler");
             let mut conn = state.pool.acquire().await?;
@@ -126,7 +142,7 @@ pub async fn pay(State(state): State<AppState>, auth: Auth, Path(id): Path<Strin
             };
             Ok(respond(code, body, false))
         }
-        // Step 3
+        // Step 3a, outcome known: record it in Tx2 (shared with the reconciler) and answer 201 or 402.
         settled => {
             let (code, body) = finish_attempt(&state.pool, attempt.id, settled).await?;
             Ok(respond(code, body, false))
@@ -142,6 +158,7 @@ enum Started {
 async fn start_attempt(state: &AppState, business_id: Uuid, invoice_id: Uuid, key: &str, hash: &[u8], card_token: &str) -> Result<Started, ApiError> {
     let ttl = state.config.idempotency_ttl;
     let mut tx = state.pool.begin().await?;
+    // 1a. New key: proceed. Finished key: replay. Different body: 422. Still running: 409.
     if let Claim::Replay(code, body) = idempotency::claim(&mut tx, business_id, key, hash, ttl).await? {
         return Ok(Started::Replay(code, body));
     }
@@ -169,11 +186,15 @@ async fn reserve(conn: &mut PgConnection, business_id: Uuid, invoice_id: Uuid, k
             .fetch_optional(&mut *conn)
             .await?
             .ok_or(ApiError::NotFound("invoice"))?;
+    // 1b. State machine: only an `open` invoice can be paid (draft/void → 409, paid → already paid).
     transition(InvoiceStatus::parse(&status).ok_or(ApiError::Internal)?, Action::Pay)?;
+    // 1c. Money may already be moving for this invoice: never start a second attempt.
     if has_pending_attempt(conn, invoice_id).await? {
         return Err(ApiError::PaymentInProgress);
     }
 
+    // 1d. Compare-and-swap: of several simultaneous requests that read the same version, exactly one
+    // updates a row; the rest get 409 at once instead of queueing on a lock.
     let won = sqlx::query("UPDATE invoices SET version = version + 1, updated_at = now() WHERE id = $1 AND version = $2")
         .bind(invoice_id)
         .bind(version)
@@ -184,6 +205,7 @@ async fn reserve(conn: &mut PgConnection, business_id: Uuid, invoice_id: Uuid, k
         return Err(ApiError::ConcurrentModification);
     }
 
+    // 1e. Record the attempt as `pending` before calling the PSP, so a crash can't lose track of it.
     // Backstop: the partial unique index allows only one pending attempt per invoice.
     sqlx::query_as(
         "INSERT INTO payment_attempts (id, business_id, invoice_id, amount_cents, status, card_token, idempotency_key)
@@ -220,6 +242,8 @@ pub async fn finish_attempt(pool: &PgPool, attempt_id: Uuid, outcome: ChargeOutc
     };
 
     let mut tx = pool.begin().await?;
+    // 3.1 Finish the attempt. `WHERE status = 'pending'` means only the first caller (request path or
+    // reconciler) updates it; the second finds nothing and answers with what was recorded.
     let finished: Option<AttemptRow> = sqlx::query_as(
         "UPDATE payment_attempts SET status = $2, psp_ref = $3, failure_code = $4, completed_at = now()
          WHERE id = $1 AND status = 'pending' RETURNING *",
@@ -236,6 +260,7 @@ pub async fn finish_attempt(pool: &PgPool, attempt_id: Uuid, outcome: ChargeOutc
         return recorded_response(&mut tx, attempt_id).await;
     };
 
+    // 3.2 On success, the invoice becomes paid, only from `open`.
     if attempt.status == "succeeded" {
         let marked = sqlx::query(
             "UPDATE invoices SET status = 'paid', paid_at = now(), version = version + 1, updated_at = now()
@@ -252,6 +277,8 @@ pub async fn finish_attempt(pool: &PgPool, attempt_id: Uuid, outcome: ChargeOutc
         }
     }
 
+    // 3.3 Outbox: the event and its webhook delivery rows commit with the state change, so a webhook
+    // is sent if and only if the payment was recorded. The worker delivers it later.
     let invoice = invoices::load(&mut tx, attempt.business_id, attempt.invoice_id, false).await?.ok_or(ApiError::Internal)?;
     let event_type = if attempt.status == "succeeded" { events::INVOICE_PAID } else { events::INVOICE_PAYMENT_FAILED };
     events::emit(
@@ -263,6 +290,7 @@ pub async fn finish_attempt(pool: &PgPool, attempt_id: Uuid, outcome: ChargeOutc
     )
     .await?;
 
+    // 3.4 Store the response under the Idempotency-Key in the same transaction, so a retry replays it.
     let (code, body) = attempt_response(&attempt, invoice["status"].as_str().unwrap_or("open"));
     idempotency::complete(&mut tx, attempt.business_id, &attempt.idempotency_key, code, &body).await?;
     tx.commit().await?;

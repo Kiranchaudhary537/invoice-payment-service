@@ -1,13 +1,11 @@
 # Build output
 /target
 
-# Assignment material (not ours to publish)
+# Personal notes, video prep and assignment material (not ours to publish)
+video_prep/
 *.pdf
-task.md
 
-# Personal notes and local tooling
-video_script.md
-video_guide.md
+# Local tooling
 .agents/
 .claude/
 skills-lock.json
@@ -18,3 +16,6 @@ skills-lock.json
 .idea/
 *.swp
 .env
+
+# Personal recording notes
+3_demo_curls.md

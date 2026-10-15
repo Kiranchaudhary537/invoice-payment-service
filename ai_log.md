@@ -3,7 +3,7 @@
 Tool: Claude Code (Opus) in VS Code, used as a design reviewer ("grill me" interview) before any code.
 Format: what AI recommended → what I decided → agreed / overrode.
 
-## Decisions made before any AI involvement (raw_design.md, iterations 1–2)
+## Decisions made before any AI involvement (my handwritten design notes, iterations 1–2)
 - `status` not `state` on invoices, to avoid confusion with payment-attempt state.
 - API keys hashed with SHA-256 (not bcrypt/argon): keys are high-entropy random, slow hashing buys nothing. Prefix lookup + constant-time compare.
 - Idempotency via a separate `idempotency_keys` table (Approach B) over key columns on payment_attempts (Approach A).

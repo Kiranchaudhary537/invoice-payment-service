@@ -127,4 +127,10 @@ migrations/           schema
 
 ## Demo Video
 
-_Link to be added._
+**[Watch the walkthrough on Google Drive](https://drive.google.com/drive/folders/1h3PuWSDlAKTZ4ulHQC_Gmk3eGbA1dC-W?usp=sharing)** (no login needed)
+
+In order, it covers:
+1. **Architecture overview**: the services, the data model, and how a request flows from the API to the database to webhook delivery.
+2. **Live demo**: `docker compose up`, create a customer and an invoice, a successful payment, a `tok_card_declined` payment, and the resulting webhook deliveries.
+3. **State machine walkthrough**: the invoice statuses, the allowed transitions, the terminal states, and where I deliberated.
+4. **Failure-mode walkthrough**: `tok_timeout`, traced through `src/payments.rs` and the reconciler.

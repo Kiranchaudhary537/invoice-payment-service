@@ -3,7 +3,7 @@
 ## Summary
 
 - **The code is 100% AI-generated.** Claude Code wrote every line: the Rust service, the mock PSP, the SQL migrations, the Dockerfile and compose file, and the tests. I didn't hand-write code.
-- **The design and architecture are mine.** I wrote them by hand in [`raw_design.md`](raw_design.md), in two iterations, before using any AI. That includes the data model, indexes, idempotency approach, API-key model, the outbox tables and the 100x plan.
+- **The design and architecture are mine.** I wrote them by hand in my own design notes, in two iterations, before using any AI. That includes the data model, indexes, idempotency approach, API-key model, the outbox tables and the 100x plan.
 - **The AI's design role was reviewer, not author.** Before any code was written, I had Claude interview me about my design. It flagged gaps and inconsistencies and, where I had an open question, offered options. I made every decision, and I overrode it where I disagreed. [`ai_log.md`](ai_log.md) records each decision with its origin.
 - **The AI also drafted the documents** (`DESIGN.md`, `API.md`, `README.md` and this file) from my decisions, and I edited them.
 
@@ -13,7 +13,7 @@
 
 | Step | Who | What happened |
 |---|---|---|
-| 1. Design | Me, no AI | Wrote `raw_design.md`: iteration 1 (entities, endpoints, first state machine, webhook ideas), then iteration 2 (full schema, indexes, idempotency trade-off, 100x plan). |
+| 1. Design | Me, no AI | Wrote my design notes by hand: iteration 1 (entities, endpoints, first state machine, webhook ideas), then iteration 2 (full schema, indexes, idempotency trade-off, 100x plan). |
 | 2. Design review | Me deciding; AI questioning | Four rounds of "grill me": it asked one round of questions at a time, I answered or decided, and each decision went into `ai_log.md`. |
 | 3. Implementation | AI | Claude Code wrote all the code from the agreed design. |
 | 4. Verification | AI ran it, I checked it | Tests, repeated runs, live `docker compose` checks, and a cross-check of the docs against the code (§5). |
@@ -27,7 +27,7 @@
 
 ## 2. Where each design decision came from
 
-**Mine, in `raw_design.md` before any AI:**
+**Mine, in my design notes before any AI:**
 - `status` (not `state`) and the five invoice statuses.
 - `business_id` on every table, as the tenant scope and future shard key, plus the composite FK that blocks cross-tenant invoices.
 - Partial unique indexes: one succeeded and one in-flight attempt per invoice.
