@@ -1,0 +1,47 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: dodo
+      POSTGRES_PASSWORD: dodo
+      POSTGRES_DB: dodo
+    ports:
+      - "5433:5432" # host 5433 so a local Postgres on 5432 does not clash; tests connect here
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dodo -d dodo"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mock-psp:
+    build: .
+    image: dodo-invoice-service
+    command: ["mock-psp"]
+    environment:
+      BIND_ADDR: 0.0.0.0:4000
+      RUST_LOG: info
+      # Must match BOOTSTRAP_WEBHOOK_SECRET below so the demo sink can verify signatures.
+      WEBHOOK_SINK_SECRET: whsec_demo_sink_secret_not_for_production
+    ports:
+      - "4000:4000"
+
+  api:
+    build: .
+    image: dodo-invoice-service
+    command: ["api"]
+    depends_on:
+      db:
+        condition: service_healthy
+      mock-psp:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgres://dodo:dodo@db:5432/dodo
+      BIND_ADDR: 0.0.0.0:3000
+      PSP_BASE_URL: http://mock-psp:4000
+      RUST_LOG: info
+      # Demo only: a fixed key so the README curl examples work as-is.
+      BOOTSTRAP_API_KEY: dodo_demo0001_LocalDemoKeyDoNotUseInProduction
+      BOOTSTRAP_WEBHOOK_URL: http://mock-psp:4000/webhook-sink
+      BOOTSTRAP_WEBHOOK_SECRET: whsec_demo_sink_secret_not_for_production
+    ports:
+      - "3000:3000"

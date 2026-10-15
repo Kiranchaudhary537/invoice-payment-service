@@ -1,0 +1,20 @@
+# Build output
+/target
+
+# Assignment material (not ours to publish)
+*.pdf
+task.md
+
+# Personal notes and local tooling
+video_script.md
+video_guide.md
+.agents/
+.claude/
+skills-lock.json
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+.env
